@@ -28,20 +28,23 @@ from pathlib import Path
 
 import shiboken6
 from PySide6.QtCore import (
-    QCollator, QDir, QFileInfo, QFileSystemWatcher, QMimeData, QMimeDatabase, QModelIndex,
-    QItemSelectionModel, QObject, QPersistentModelIndex, QProcess, QProcessEnvironment, QRect, QSettings, QSize, QTimer, QSortFilterProxyModel, QStorageInfo, Qt, QUrl, Signal,
+    QCollator, QDir, QFileInfo, QFileSystemWatcher, QItemSelectionModel, QMimeData,
+    QMimeDatabase, QModelIndex, QObject, QPersistentModelIndex, QPointF, QProcess,
+    QProcessEnvironment, QRect, QRectF, QSettings, QSize, QSortFilterProxyModel, QStorageInfo,
+    Qt, QTimer, QUrl, Signal,
 )
 from PySide6.QtGui import (
-    QAction, QActionGroup, QDesktopServices, QFont, QFontDatabase, QGuiApplication, QIcon,
-    QImage, QImageReader, QKeySequence, QPixmap,
+    QAction, QActionGroup, QColor, QCursor, QDesktopServices, QFont, QFontDatabase, QGuiApplication,
+    QIcon, QImage, QImageReader, QKeySequence, QPainter, QPainterPath, QPalette, QPen, QPixmap,
 )
 from PySide6.QtWidgets import (
     QAbstractItemView, QApplication, QButtonGroup, QCheckBox, QComboBox, QCompleter, QDialog,
     QDialogButtonBox, QFileDialog, QFileIconProvider, QFileSystemModel, QFormLayout, QFrame,
-    QGridLayout, QInputDialog, QPushButton, QRadioButton, QTableWidget, QTableWidgetItem,
-    QHBoxLayout, QHeaderView, QLabel, QLineEdit, QListView, QMainWindow, QMenu, QMessageBox, QPlainTextEdit, QSplitter,
-    QSizePolicy, QStackedWidget, QStyle, QStyledItemDelegate, QStyleOptionViewItem, QTabWidget, QToolButton, QTreeView, QTreeWidget, QTreeWidgetItem, QVBoxLayout,
-    QWidget,
+    QGridLayout, QHBoxLayout, QHeaderView, QInputDialog, QLabel, QLineEdit, QListView,
+    QMainWindow, QMenu, QMessageBox, QPlainTextEdit, QPushButton, QRadioButton, QSizePolicy,
+    QSplitter, QStackedWidget, QStyle, QStyledItemDelegate, QStyleOptionViewItem, QTableWidget,
+    QTableWidgetItem, QTabWidget, QToolButton, QTreeView, QTreeWidget, QTreeWidgetItem,
+    QVBoxLayout, QWidget,
 )
 
 APP_NAME = "unfinder"
@@ -64,13 +67,271 @@ def migrate_legacy_settings(settings: QSettings) -> None:
     for key in old.allKeys():
         settings.setValue(key, old.value(key))
     settings.sync()
+
+
 HOME = str(Path.home())
 
-STYLE = """
-#pane { border: 1px solid transparent; border-radius: 6px; }
-#pane[active="true"] { border: 1px solid palette(highlight); }
-QTreeView { border: none; }
+
+# ---------------------------------------------------------------- theme
+
+# Colours follow macOS Light/Dark mode (switching live) and your system accent colour.
+_THEME: dict[str, QColor] = {}
+_ACCENT: QColor | None = None
+_THEMED_ICONS: list[tuple[object, str]] = []   # (widget or action, icon name) to recolour
+
+
+def is_dark() -> bool:
+    return QGuiApplication.styleHints().colorScheme() == Qt.ColorScheme.Dark
+
+
+def _rgba(color, alpha: float = 1.0) -> QColor:
+    c = QColor(color)
+    c.setAlphaF(c.alphaF() * alpha)
+    return c
+
+
+def theme_colors() -> dict[str, QColor]:
+    global _ACCENT
+    if _ACCENT is None:  # read once, before we replace the application palette
+        pal = QGuiApplication.palette()
+        role = getattr(QPalette.ColorRole, "Accent", QPalette.ColorRole.Highlight)
+        _ACCENT = QColor(pal.color(role))
+    accent = QColor(_ACCENT)
+    if is_dark():
+        base = dict(window="#1f1f22", card="#17171a", text="#ececf0", secondary="#9a9aa2",
+                    tertiary="#5c5c63", tab_sel="#2e2e33")
+        ink = QColor("#ffffff")
+    else:
+        base = dict(window="#f2f2f5", card="#ffffff", text="#1d1d1f", secondary="#6e6e76",
+                    tertiary="#b0b0b6", tab_sel="#e6e6ea")
+        ink = QColor("#000000")
+    c = {k: QColor(v) for k, v in base.items()}
+    c.update(accent=accent, sel_text=QColor("#ffffff"),
+             sep=_rgba(ink, 0.09), hover=_rgba(ink, 0.055), pressed=_rgba(ink, 0.10),
+             field=_rgba(ink, 0.06), field_focus=_rgba(ink, 0.03),
+             inactive_sel=_rgba(ink, 0.11), accent_soft=_rgba(accent, 0.20),
+             accent_border=_rgba(accent, 0.55), sidebar_sel=_rgba(ink, 0.09),
+             scroll=_rgba(ink, 0.22), scroll_hover=_rgba(ink, 0.38),
+             icon=_rgba(c["text"], 0.82))
+    return c
+
+
+QSS = """
+QMainWindow, QSplitter { background: @window; }
+QSplitter::handle { background: transparent; }
+QSplitter::handle:horizontal { width: 8px; }
+
+QToolBar#main { background: @window; border: none; padding: 8px 12px 6px 12px; spacing: 3px; }
+QToolBar#main::separator { background: @sep; width: 1px; margin: 7px 6px; }
+QToolButton { background: transparent; border: none; border-radius: 7px; padding: 5px;
+              color: @text; }
+QToolButton:hover { background: @hover; }
+QToolButton:pressed { background: @pressed; }
+QToolButton:checked { background: @accent_soft; color: @accent; }
+QToolButton:disabled { color: @tertiary; }
+QToolButton::menu-indicator { image: none; width: 0px; }
+QToolButton#pill { padding: 4px 9px; color: @secondary; }
+QToolButton#pill:hover { color: @text; }
+
+QLineEdit { background: @field; border: 1px solid transparent; border-radius: 8px;
+            padding: 5px 8px; color: @text; selection-background-color: @accent;
+            selection-color: #ffffff; }
+QLineEdit:focus { border: 1px solid @accent_border; background: @field_focus; }
+
+QTreeWidget#sidebar { background: @window; border: none; padding: 2px 4px 2px 8px; outline: 0; }
+QTreeWidget#sidebar::item { height: 28px; border: none; border-radius: 7px; padding-left: 4px;
+                            color: @text; }
+QTreeWidget#sidebar::item:hover { background: @hover; }
+QTreeWidget#sidebar::item:selected { background: @sidebar_sel; color: @text; }
+QTreeWidget#sidebar::branch { background: transparent; }
+
+QFrame#pane, QWidget#preview { background: @card; border: 1px solid @sep; border-radius: 12px; }
+QFrame#pane[active="true"] { border: 1px solid @accent_border; }
+
+QTabWidget::pane { border: none; }
+QTabBar { qproperty-drawBase: 0; background: transparent; }
+QTabBar::tab { background: transparent; color: @secondary; padding: 5px 12px;
+               margin: 6px 2px 2px 0px; border-radius: 7px; min-width: 60px; }
+QTabBar::tab:first { margin-left: 6px; }
+QTabBar::tab:selected { background: @tab_sel; color: @text; }
+QTabBar::tab:hover:!selected { background: @hover; color: @text; }
+
+QTreeView, QListView { background: @card; border: none; outline: 0; color: @text;
+                       selection-background-color: transparent; }
+FileView::item { border: none; padding: 0px 4px; }
+FileView::item:selected { background: transparent; color: @sel_text; }
+FileView::item:selected:!active { color: @text; }
+FileView::item:hover { background: transparent; }
+IconView::item { border: none; border-radius: 8px; color: @text; }
+IconView::item:hover { background: @hover; }
+IconView::item:selected { background: @accent; color: @sel_text; }
+IconView::item:selected:!active { background: @inactive_sel; color: @text; }
+
+QHeaderView { background: @card; border: none; }
+QHeaderView::section { background: @card; color: @secondary; border: none;
+                       border-bottom: 1px solid @sep; padding: 4px 8px; font-size: 11px; }
+QHeaderView::section:hover { color: @text; }
+
+QPlainTextEdit#previewText { background: transparent; border: none; color: @text; }
+
+QStatusBar { background: @window; border: none; }
+QStatusBar::item { border: none; }
+QStatusBar QLabel { color: @secondary; padding: 0px 8px; font-size: 11px; }
+
+QScrollBar:vertical { background: transparent; width: 11px; margin: 2px 1px 2px 0px; }
+QScrollBar::handle:vertical { background: @scroll; border-radius: 4px; min-height: 32px;
+                              margin: 0px 2px; }
+QScrollBar:horizontal { background: transparent; height: 11px; margin: 0px 2px 1px 2px; }
+QScrollBar::handle:horizontal { background: @scroll; border-radius: 4px; min-width: 32px;
+                                margin: 2px 0px; }
+QScrollBar::handle:hover { background: @scroll_hover; }
+QScrollBar::add-line, QScrollBar::sub-line { width: 0px; height: 0px; }
+QScrollBar::add-page, QScrollBar::sub-page { background: transparent; }
 """
+
+
+def _css(c: QColor) -> str:
+    return f"rgba({c.red()}, {c.green()}, {c.blue()}, {c.alpha()})"
+
+
+def apply_theme(app: QApplication) -> None:
+    """(Re)apply colours, palette, stylesheet and icon colours for the current appearance."""
+    _THEME.clear()
+    _THEME.update(theme_colors())
+    t = _THEME
+    pal = QPalette()
+    for role, key in ((QPalette.Window, "window"), (QPalette.Base, "card"),
+                      (QPalette.AlternateBase, "window"), (QPalette.Button, "window"),
+                      (QPalette.WindowText, "text"), (QPalette.Text, "text"),
+                      (QPalette.ButtonText, "text"), (QPalette.Highlight, "accent"),
+                      (QPalette.HighlightedText, "sel_text"), (QPalette.Link, "accent"),
+                      (QPalette.PlaceholderText, "secondary")):
+        pal.setColor(role, t[key])
+    pal.setColor(QPalette.Mid, t["tertiary"])
+    for role in (QPalette.WindowText, QPalette.Text, QPalette.ButtonText):
+        pal.setColor(QPalette.Disabled, role, t["tertiary"])
+    app.setPalette(pal)
+    qss = QSS
+    for key in sorted(t, key=len, reverse=True):  # longest first: @accent_soft before @accent
+        qss = qss.replace("@" + key, _css(t[key]))
+    app.setStyleSheet(qss)
+    alive = []
+    for target, name in _THEMED_ICONS:
+        if shiboken6.isValid(target):
+            target.setIcon(line_icon(name))
+            alive.append((target, name))
+    _THEMED_ICONS[:] = alive
+
+
+def theme() -> dict[str, QColor]:
+    return _THEME or theme_colors()
+
+
+# Line icons drawn in code (24×24 grid), so they're crisp on Retina and follow the theme.
+def _icon_paths(name: str) -> list[tuple[QPainterPath, bool]]:
+    """Return (path, filled) pairs for an icon."""
+    p = QPainterPath()
+    filled = QPainterPath()
+
+    def rrect(x, y, w, h, r):
+        p.addRoundedRect(QRectF(x, y, w, h), r, r)
+
+    def poly(*pts):
+        p.moveTo(*pts[0])
+        for pt in pts[1:]:
+            p.lineTo(*pt)
+
+    if name == "back":
+        poly((15, 5), (8, 12), (15, 19))
+    elif name == "forward":
+        poly((9, 5), (16, 12), (9, 19))
+    elif name == "up":
+        poly((12, 19.5), (12, 5))
+        poly((6.5, 10.5), (12, 5), (17.5, 10.5))
+    elif name == "plus":
+        poly((12, 5), (12, 19))
+        poly((5, 12), (19, 12))
+    elif name == "new_folder":
+        p.moveTo(3, 17.5); p.lineTo(3, 6.5); p.quadTo(3, 5, 4.5, 5); p.lineTo(9, 5)
+        p.lineTo(11, 7.5); p.lineTo(19.5, 7.5); p.quadTo(21, 7.5, 21, 9); p.lineTo(21, 17.5)
+        p.quadTo(21, 19, 19.5, 19); p.lineTo(4.5, 19); p.quadTo(3, 19, 3, 17.5)
+        poly((12, 10.5), (12, 16))
+        poly((9.25, 13.25), (14.75, 13.25))
+    elif name == "rename":
+        poly((4, 20), (5, 15.5), (15.5, 5), (19, 8.5), (8.5, 19), (4, 20))
+        poly((13, 7.5), (16.5, 11))
+    elif name == "info":
+        p.addEllipse(QPointF(12, 12), 8.5, 8.5)
+        poly((12, 11), (12, 16.5))
+        filled.addEllipse(QPointF(12, 7.9), 1.1, 1.1)
+    elif name == "eye":
+        p.moveTo(2.5, 12); p.quadTo(12, 3, 21.5, 12); p.quadTo(12, 21, 2.5, 12)
+        p.addEllipse(QPointF(12, 12), 3, 3)
+    elif name == "dual":
+        rrect(3.5, 5, 17, 14, 2.5)
+        poly((12, 5), (12, 19))
+    elif name == "preview":
+        rrect(3.5, 5, 17, 14, 2.5)
+        poly((14.5, 5), (14.5, 19))
+        poly((16.5, 9), (18.5, 9))
+        poly((16.5, 12), (18.5, 12))
+    elif name == "view":
+        for x, y in ((3, 5), (10, 5), (3, 12), (10, 12)):
+            rrect(x, y, 5.2, 5.2, 1.3)
+        poly((17.5, 10.5), (19.5, 12.5), (21.5, 10.5))
+    elif name == "settings":
+        for y, kx in ((7, 9), (12, 15), (17, 7)):
+            poly((4, y), (kx - 2.2, y))
+            poly((kx + 2.2, y), (20, y))
+            p.addEllipse(QPointF(kx, y), 2.2, 2.2)
+    elif name == "search":
+        p.addEllipse(QPointF(10.5, 10.5), 6, 6)
+        poly((15, 15), (20, 20))
+    elif name == "copy":
+        rrect(8.5, 8.5, 11.5, 11.5, 2)
+        p.moveTo(15.5, 8.5); p.lineTo(15.5, 5.5); p.quadTo(15.5, 4, 14, 4); p.lineTo(5.5, 4)
+        p.quadTo(4, 4, 4, 5.5); p.lineTo(4, 14); p.quadTo(4, 15.5, 5.5, 15.5); p.lineTo(8.5, 15.5)
+    elif name == "list":
+        for y in (7, 12, 17):
+            poly((8, y), (20, y))
+            filled.addEllipse(QPointF(4.5, y), 1.2, 1.2)
+    elif name == "grid":
+        for x, y in ((4, 4), (13, 4), (4, 13), (13, 13)):
+            rrect(x, y, 7, 7, 1.6)
+    return [(p, False), (filled, True)]
+
+
+def _draw_icon(name: str, color: QColor, size: int, scale: int) -> QPixmap:
+    pm = QPixmap(size * scale, size * scale)
+    pm.fill(Qt.transparent)
+    pm.setDevicePixelRatio(scale)
+    painter = QPainter(pm)
+    painter.setRenderHint(QPainter.Antialiasing)
+    painter.scale(size / 24, size / 24)
+    pen = QPen(color, 1.7, Qt.SolidLine, Qt.RoundCap, Qt.RoundJoin)
+    for path, filled in _icon_paths(name):
+        if filled:
+            painter.fillPath(path, color)
+        else:
+            painter.strokePath(path, pen)
+    painter.end()
+    return pm
+
+
+def line_icon(name: str, size: int = 18) -> QIcon:
+    t = theme()
+    icon = QIcon()
+    for scale in (1, 2):
+        icon.addPixmap(_draw_icon(name, t["icon"], size, scale), QIcon.Normal, QIcon.Off)
+        icon.addPixmap(_draw_icon(name, t["accent"], size, scale), QIcon.Normal, QIcon.On)
+        icon.addPixmap(_draw_icon(name, t["tertiary"], size, scale), QIcon.Disabled, QIcon.Off)
+    return icon
+
+
+def set_line_icon(target, name: str) -> None:
+    """Give a button or action a line icon that is recoloured when the theme changes."""
+    target.setIcon(line_icon(name))
+    _THEMED_ICONS.append((target, name))
 
 
 # ---------------------------------------------------------------- helpers
@@ -473,6 +734,38 @@ class FileView(ViewBehavior, QTreeView):
     COLUMN_WIDTHS = {1: 90, 2: 140, 3: 150}  # Size, Kind, Date Modified
     MIN_NAME_WIDTH = 200
 
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.viewport().setAttribute(Qt.WA_Hover)
+        self.setMouseTracking(True)
+
+    def viewportEvent(self, e):
+        if e.type() in (e.Type.HoverMove, e.Type.HoverLeave):
+            self.viewport().update()  # repaint the row-hover highlight
+        return super().viewportEvent(e)
+
+    def drawRow(self, painter, option, index):
+        # One rounded highlight across the whole row (the stylesheet makes cells transparent).
+        sm = self.selectionModel()
+        selected = sm is not None and sm.isRowSelected(index.row(), index.parent())
+        hovered = False
+        if not selected and self.viewport().underMouse():
+            under = self.indexAt(self.viewport().mapFromGlobal(QCursor.pos()))
+            hovered = under.isValid() and under.row() == index.row() and \
+                under.parent() == index.parent()
+        if selected or hovered:
+            t = theme()
+            color = (t["accent"] if self.isActiveWindow() else t["inactive_sel"]) \
+                if selected else t["hover"]
+            painter.save()
+            painter.setRenderHint(QPainter.Antialiasing)
+            painter.setPen(Qt.NoPen)
+            painter.setBrush(color)
+            painter.drawRoundedRect(QRectF(5, option.rect.top() + 1, self.viewport().width() - 10,
+                                           option.rect.height() - 2), 6, 6)
+            painter.restore()
+        super().drawRow(painter, option, index)
+
     def resizeEvent(self, e):
         super().resizeEvent(e)
         self.fit_columns()
@@ -506,6 +799,17 @@ class NameDelegate(QStyledItemDelegate):
             n = len(name) if os.path.isdir(path) else len(Path(name).stem)
             # Qt selects everything after this call, so apply our selection afterwards.
             QTimer.singleShot(0, lambda: editor.setSelection(0, n))
+
+
+class RowDelegate(NameDelegate):
+    """Details layout rows: a little taller, for a more spacious modern look."""
+
+    ROW_HEIGHT = 28
+
+    def sizeHint(self, option, index):
+        size = super().sizeHint(option, index)
+        size.setHeight(max(size.height(), self.ROW_HEIGHT))
+        return size
 
 
 class _DetailDelegate(NameDelegate):
@@ -663,12 +967,13 @@ class BrowserTab(QWidget):
         # Details layout
         tree = self.tree = FileView(self)
         tree.setModel(self.proxy)
-        tree.setItemDelegate(NameDelegate(tree))
+        tree.setItemDelegate(RowDelegate(tree))
         tree.setup_common()
         tree.setSortingEnabled(True)
         tree.sortByColumn(0, Qt.AscendingOrder)
         tree.setUniformRowHeights(True)
-        tree.setAlternatingRowColors(True)
+        tree.setAlternatingRowColors(False)
+        tree.setIconSize(QSize(18, 18))
         tree.setExpandsOnDoubleClick(False)
         header = tree.header()
         header.setStretchLastSection(False)
@@ -703,15 +1008,16 @@ class BrowserTab(QWidget):
 
         def tool(icon, tip, slot):
             b = QToolButton(self)
-            b.setIcon(self.style().standardIcon(icon))
+            set_line_icon(b, icon)
+            b.setIconSize(QSize(16, 16))
             b.setToolTip(tip)
             b.setAutoRaise(True)
             b.clicked.connect(lambda: slot())
             return b
 
-        self.btn_back = tool(QStyle.SP_ArrowBack, "Back (⌘[)", self.go_back)
-        self.btn_fwd = tool(QStyle.SP_ArrowForward, "Forward (⌘])", self.go_forward)
-        self.btn_up = tool(QStyle.SP_ArrowUp, "Enclosing Folder (⌘↑)", self.go_up)
+        self.btn_back = tool("back", "Back (⌘[)", self.go_back)
+        self.btn_fwd = tool("forward", "Forward (⌘])", self.go_forward)
+        self.btn_up = tool("up", "Enclosing Folder (⌘↑)", self.go_up)
         self.path_edit = PathEdit(self)
         self.path_edit.setPlaceholderText("Type or paste a path, then press Return")
         self.path_edit.setMinimumWidth(140)
@@ -719,11 +1025,15 @@ class BrowserTab(QWidget):
         self.path_edit.returnPressed.connect(lambda: self.go_to(self.path_edit.text()))
         self.path_edit.escaped.connect(self._reset_path_edit)
         self.btn_copy_path = QToolButton(self, text="Copy Path")
+        self.btn_copy_path.setObjectName("pill")
+        set_line_icon(self.btn_copy_path, "copy")
+        self.btn_copy_path.setIconSize(QSize(14, 14))
+        self.btn_copy_path.setToolButtonStyle(Qt.ToolButtonTextBesideIcon)
         self.btn_copy_path.setToolTip("Copy this folder's path to the clipboard")
         self.btn_copy_path.clicked.connect(lambda: self.copy_folder_path())
 
         nav = QHBoxLayout()
-        nav.setContentsMargins(4, 4, 4, 2)
+        nav.setContentsMargins(6, 4, 6, 6)
         nav.setSpacing(2)
         for w in (self.btn_back, self.btn_fwd, self.btn_up):
             nav.addWidget(w)
@@ -915,7 +1225,9 @@ class Pane(QFrame):
         self.tabs.setTabsClosable(True)
         self.tabs.setMovable(True)
         self.tabs.setDocumentMode(True)
-        plus = QToolButton(text="+")
+        plus = QToolButton()
+        set_line_icon(plus, "plus")
+        plus.setIconSize(QSize(14, 14))
         plus.setToolTip("New Tab (⌘T)")
         plus.setAutoRaise(True)
         plus.clicked.connect(lambda: window.new_tab(self))
@@ -923,7 +1235,7 @@ class Pane(QFrame):
         self.tabs.tabCloseRequested.connect(lambda i: window.close_tab(self, i))
         self.tabs.currentChanged.connect(lambda _: window.on_tab_switched(self))
         layout = QVBoxLayout(self)
-        layout.setContentsMargins(1, 1, 1, 1)
+        layout.setContentsMargins(4, 0, 4, 6)  # keeps content inside the rounded corners
         layout.addWidget(self.tabs)
 
     def current(self) -> BrowserTab:
@@ -941,8 +1253,9 @@ class Sidebar(QTreeWidget):
 
     def __init__(self, favorites: list[str]):
         super().__init__()
+        self.setObjectName("sidebar")
         self.setHeaderHidden(True)
-        self.setIndentation(10)
+        self.setIndentation(6)
         self.setRootIsDecorated(False)
         self.setIconSize(QSize(16, 16))
         self.setContextMenuPolicy(Qt.CustomContextMenu)
@@ -963,9 +1276,8 @@ class Sidebar(QTreeWidget):
         item.setFlags(Qt.ItemIsEnabled)
         font = QFont(item.font(0))
         font.setBold(True)
-        font.setPointSizeF(font.pointSizeF() * 0.85)
+        font.setPointSizeF(font.pointSizeF() * 0.82)
         item.setFont(0, font)
-        item.setForeground(0, self.palette().placeholderText())
         item.setExpanded(True)
         return item
 
@@ -1043,17 +1355,20 @@ TEXT_SNIFF_BYTES = 128 * 1024
 class PreviewPanel(QWidget):
     def __init__(self):
         super().__init__()
+        self.setObjectName("preview")
+        self.setAttribute(Qt.WA_StyledBackground)
         self.setMinimumWidth(200)
         self.image = QLabel(alignment=Qt.AlignCenter)
         self.image.setMinimumHeight(140)
         self.text = QPlainTextEdit(readOnly=True)
+        self.text.setObjectName("previewText")
         self.text.setFont(QFontDatabase.systemFont(QFontDatabase.FixedFont))
-        self.text.setLineWrapMode(QPlainTextEdit.NoWrap)
+        self.text.setLineWrapMode(QPlainTextEdit.WidgetWidth)  # no sideways scrolling
         self.info = QLabel(wordWrap=True)
         self.info.setTextInteractionFlags(Qt.TextSelectableByMouse)
         self.info.setAlignment(Qt.AlignTop | Qt.AlignLeft)
         layout = QVBoxLayout(self)
-        layout.setContentsMargins(12, 12, 12, 12)
+        layout.setContentsMargins(16, 16, 16, 16)
         layout.addWidget(self.image)
         layout.addWidget(self.text, 1)
         layout.addWidget(self.info)
@@ -1112,7 +1427,8 @@ class PreviewPanel(QWidget):
         rows.append(("Modified", info.lastModified().toString(fmt)))
         rows.append(("Where", info.absolutePath()))
         body = "".join(
-            f"<tr><td style='color:gray;padding-right:8px'>{k}</td><td>{html.escape(v)}</td></tr>"
+            f"<tr><td style='color:{theme()['secondary'].name()};padding-right:10px'>{k}</td>"
+            f"<td>{html.escape(v)}</td></tr>"
             for k, v in rows)
         self.info.setText(f"<b>{html.escape(info.fileName() or info.absoluteFilePath())}</b>"
                           f"<table style='margin-top:6px'>{body}</table>")
@@ -1817,8 +2133,10 @@ class MainWindow(QMainWindow):
         self.status_label = QLabel()
         self.statusBar().addWidget(self.status_label)
         self.status_view_buttons = {}
-        for mode, glyph in (("details", "☰"), ("large", "▦")):
-            b = QToolButton(text=glyph)
+        for mode, glyph in (("details", "list"), ("large", "grid")):
+            b = QToolButton()
+            set_line_icon(b, glyph)
+            b.setIconSize(QSize(15, 15))
             b.setToolTip(VIEW_LABELS[mode])
             b.setCheckable(True)
             b.setAutoRaise(True)
@@ -1865,7 +2183,8 @@ class MainWindow(QMainWindow):
     def _act(self, text, slot, shortcut=None, icon=None, checkable=False) -> QAction:
         a = QAction(text, self)
         if icon is not None:
-            a.setIcon(self.style().standardIcon(icon))
+            set_line_icon(a, icon)
+            a.setIconVisibleInMenu(False)  # keep the native menus clean
         if shortcut:
             shortcuts = shortcut if isinstance(shortcut, (list, tuple)) else [shortcut]
             a.setShortcuts([QKeySequence(s) for s in shortcuts])
@@ -1878,12 +2197,11 @@ class MainWindow(QMainWindow):
         return a
 
     def _build_actions(self) -> None:
-        S = QStyle.StandardPixmap
         A = self._act
         # Qt maps "Ctrl" to ⌘ and "Meta" to ⌃ on macOS.
-        self.act_back = A("Back", lambda: self.tab().go_back(), "Ctrl+[", S.SP_ArrowBack)
-        self.act_fwd = A("Forward", lambda: self.tab().go_forward(), "Ctrl+]", S.SP_ArrowForward)
-        self.act_up = A("Enclosing Folder", lambda: self.tab().go_up(), "Ctrl+Up", S.SP_ArrowUp)
+        self.act_back = A("Back", lambda: self.tab().go_back(), "Ctrl+[")
+        self.act_fwd = A("Forward", lambda: self.tab().go_forward(), "Ctrl+]")
+        self.act_up = A("Enclosing Folder", lambda: self.tab().go_up(), "Ctrl+Up")
         self.act_home = A("Home", lambda: self.go_to(HOME), "Ctrl+Shift+H")
         self.act_desktop = A("Desktop", lambda: self.go_to(f"{HOME}/Desktop"), "Ctrl+Shift+D")
         self.act_docs = A("Documents", lambda: self.go_to(f"{HOME}/Documents"), "Ctrl+Shift+O")
@@ -1897,10 +2215,10 @@ class MainWindow(QMainWindow):
         self.act_next_tab = A("Next Tab", lambda: self.cycle_tab(1), "Meta+Tab")
         self.act_prev_tab = A("Previous Tab", lambda: self.cycle_tab(-1), "Meta+Shift+Tab")
         self.act_new_folder = A("New Folder", self.new_folder, "Ctrl+Shift+N",
-                                S.SP_FileDialogNewFolder)
+                                "new_folder")
         self.act_open = A("Open", lambda: self.tab().open_selection(), ["Ctrl+O", "Ctrl+Down"])
         self.act_quicklook = A("Quick Look", self.quick_look, "Ctrl+Y")
-        self.act_trash = A("Move to Trash", self.trash, "Ctrl+Backspace", S.SP_TrashIcon)
+        self.act_trash = A("Move to Trash", self.trash, "Ctrl+Backspace")
         self.act_delete = A("Delete Immediately…", self.delete_permanently, "Ctrl+Alt+Backspace")
         self.act_reveal = A("Show in Finder", self.reveal_in_finder, "Ctrl+Alt+R")
         self.act_terminal = A("Open in Terminal", self.open_terminal, "Ctrl+Alt+T")
@@ -1910,10 +2228,10 @@ class MainWindow(QMainWindow):
         self.act_copy = A("Copy", self.copy, "Ctrl+C")
         self.act_paste = A("Paste", self.paste, "Ctrl+V")
         self.act_duplicate = A("Duplicate", self.duplicate, "Ctrl+D")
-        self.act_rename = A("Rename", self.rename, "F2")
+        self.act_rename = A("Rename", self.rename, "F2", "rename")
         self.act_properties = A("Properties", self.show_properties, ["Ctrl+I", "Alt+Return"],
-                                S.SP_FileDialogInfoView)
-        self.act_settings = A("Settings…", self.open_settings, "Ctrl+,")
+                                "info")
+        self.act_settings = A("Settings…", self.open_settings, "Ctrl+,", "settings")
         self.act_settings.setMenuRole(QAction.PreferencesRole)  # → app menu on macOS
         self.act_edit_commands = A("Edit Custom Commands…", self.edit_commands)
         self.act_copy_path = A("Copy Path", self.copy_path, "Ctrl+Alt+C")
@@ -1926,9 +2244,10 @@ class MainWindow(QMainWindow):
         self.act_find = A("Filter…", self.focus_search, "Ctrl+F")
 
         self.act_hidden = A("Show Hidden Files", self.set_show_hidden,
-                            ["Ctrl+Shift+.", "Ctrl+>"], checkable=True)
-        self.act_dual = A("Dual Pane", self.set_dual, "Ctrl+Alt+D", checkable=True)
-        self.act_preview = A("Show Preview", self.set_preview, "Ctrl+Shift+P", checkable=True)
+                            ["Ctrl+Shift+.", "Ctrl+>"], "eye", checkable=True)
+        self.act_dual = A("Dual Pane", self.set_dual, "Ctrl+Alt+D", "dual", checkable=True)
+        self.act_preview = A("Show Preview", self.set_preview, "Ctrl+Shift+P", "preview",
+                             checkable=True)
 
         # Layouts: ⌘1 … ⌘8, in Windows order
         self.view_group = QActionGroup(self)
@@ -1956,34 +2275,38 @@ class MainWindow(QMainWindow):
 
     def _build_toolbar(self) -> None:
         tb = self.addToolBar("Navigation")
+        tb.setObjectName("main")
         tb.setMovable(False)
-        tb.setIconSize(QSize(16, 16))
-        tb.setToolButtonStyle(Qt.ToolButtonTextBesideIcon)
+        tb.setIconSize(QSize(18, 18))
+        tb.setToolButtonStyle(Qt.ToolButtonIconOnly)
         tb.addAction(self.act_new_folder)
-        view_btn = QToolButton(text="View")
-        view_btn.setToolTip("Change layout (⌘1–⌘8, or ⌘ + scroll)")
+        view_btn = QToolButton()
+        set_line_icon(view_btn, "view")
+        view_btn.setToolTip("View: change layout (⌘1–⌘8, or ⌘ + scroll)")
         view_btn.setPopupMode(QToolButton.InstantPopup)
         view_btn.setMenu(self._view_menu(include_window_options=False))
         tb.addWidget(view_btn)
         tb.addAction(self.act_rename)
         tb.addAction(self.act_properties)
-        self.act_hidden.setIconText("Hidden Files")
         self.act_hidden.setToolTip("Show hidden files (⇧⌘.)")
-        tb.addAction(self.act_hidden)
         tb.addSeparator()
-        for act, label in ((self.act_dual, "Dual"), (self.act_preview, "Preview")):
-            act.setIconText(label)
-            tb.addAction(act)
+        tb.addAction(self.act_hidden)
+        self.act_dual.setToolTip("Dual pane (⌥⌘D)")
+        self.act_preview.setToolTip("Preview panel (⇧⌘P)")
+        tb.addAction(self.act_dual)
+        tb.addAction(self.act_preview)
         spacer = QWidget()
         spacer.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Preferred)
         tb.addWidget(spacer)
         self.search = QLineEdit()
-        self.search.setPlaceholderText("Filter this folder  ⌘F")
+        self.search.setPlaceholderText("Filter  ⌘F")
         self.search.setClearButtonEnabled(True)
-        self.search.setFixedWidth(210)
+        self.search.setFixedWidth(220)
+        set_line_icon(self.search.addAction(QIcon(), QLineEdit.LeadingPosition), "search")
         self.search.textChanged.connect(self._on_search)
         self.search.returnPressed.connect(lambda: self.tab().view.setFocus())
         tb.addWidget(self.search)
+        self.act_settings.setToolTip("Settings (⌘,)")
         tb.addAction(self.act_settings)
 
     def _build_menus(self) -> None:
@@ -2659,7 +2982,8 @@ def main() -> None:
     QApplication.setApplicationName(APP_NAME)
     QApplication.setApplicationDisplayName(APP_NAME)
     app = App(sys.argv)
-    app.setStyleSheet(STYLE)
+    apply_theme(app)
+    QGuiApplication.styleHints().colorSchemeChanged.connect(lambda _: apply_theme(app))
     icon = resource_path("assets/unfinder.png")
     if os.path.exists(icon):
         app.setWindowIcon(QIcon(icon))  # the Dock icon when running from source

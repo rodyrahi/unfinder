@@ -18,8 +18,10 @@ echo "→ Built dist/unfinder.app ($(du -sh dist/unfinder.app | cut -f1))"
 if [[ "${1:-}" == "--install" ]]; then
     if pgrep -xq unfinder; then
         echo "→ Quitting the running unfinder"
-        osascript -e 'tell application "unfinder" to quit' || true
-        sleep 1
+        # Qt answers the quit request with a harmless "User cancelled" error, so hide it.
+        osascript -e 'tell application "unfinder" to quit' >/dev/null 2>&1 || true
+        for _ in {1..20}; do pgrep -xq unfinder || break; sleep 0.25; done
+        pgrep -xq unfinder && pkill -x unfinder || true
     fi
     echo "→ Installing to /Applications"
     rm -rf /Applications/unfinder.app
