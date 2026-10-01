@@ -1,0 +1,15 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 387 392">
+  <!-- Traced from assets/icon-source.png (387×392) so it stays sharp at every icon size. -->
+  <!-- white rounded frame and the dark rounded square inside it -->
+  <rect x="0" y="0" width="387" height="392" rx="29" fill="#ffffff"/>
+  <rect x="13.5" y="13.5" width="360" height="365" rx="14" fill="#1a1a1a"/>
+  <!-- face: white right half with the nose profile, thin black outline -->
+  <path d="M196.9 23.5 L358.5 23.5 L358.5 367.5 L197.3 367.5 L201.8 198 L151.2 195 Z"
+        fill="#f9f9f9" stroke="#000" stroke-width="3" stroke-linejoin="miter"/>
+  <!-- eyes -->
+  <rect x="92" y="68" width="31.5" height="86.5" rx="8" fill="#5a8bc3"/>
+  <rect x="256" y="73" width="31.5" height="86.5" rx="8" fill="#5a8bc3"/>
+  <!-- smile: arc of a circle centred at (184.8, 165.7), radius 155.5 -->
+  <path d="M60.6 259.3 A155.5 155.5 0 0 0 308.2 260.4"
+        fill="none" stroke="#5a8bc3" stroke-width="17.5" stroke-linecap="butt"/>
+</svg>
