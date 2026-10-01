@@ -43,7 +43,7 @@ Requirements: macOS 12 or later, and [uv](https://docs.astral.sh/uv/)
 (`brew install uv`). uv downloads Python, Qt and PyInstaller for you.
 
 ```bash
-git clone https://github.com/<your-username>/unfinder.git
+git clone https://github.com/rodyrahi/unfinder.git
 cd unfinder
 ./build.sh --install
 ```
